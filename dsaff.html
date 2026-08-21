@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head><title>Klukva Key Manager</title>
+<script src="https://cdn.tailwindcss.com"></script></head>
+<body class="bg-gray-900 text-white p-8">
+  <div class="max-w-4xl mx-auto">
+    <h1 class="text-3xl mb-6">Менеджер ключей</h1>
+    <input id="token" type="password" placeholder="Admin Token" class="w-full p-2 bg-gray-800 rounded mb-4">
+    <div class="flex gap-2 mb-4">
+      <input id="days" type="number" value="30" class="w-24 p-2 bg-gray-800 rounded">
+      <input id="note" type="text" placeholder="Заметка" class="flex-1 p-2 bg-gray-800 rounded">
+      <button onclick="createKey()" class="bg-green-600 px-4 py-2 rounded">Создать</button>
+    </div>
+    <div id="keys" class="space-y-2"></div>
+  </div>
+  <script>
+    const API = 'https://keys-b.onrender.com';
+    const headers = () => ({ 'x-admin-token': document.getElementById('token').value });
+    
+    async function loadKeys() {
+      const res = await fetch(API + '/api/admin/keys', { headers: headers() });
+      const keys = await res.json();
+      document.getElementById('keys').innerHTML = Object.entries(keys).map(([k,v]) => 
+        `<div class="flex items-center gap-2 p-2 bg-gray-800 rounded">
+          <code class="flex-1 text-sm">${k}</code>
+          <span class="text-xs text-gray-400">${new Date(v.created).toLocaleString()}</span>
+          <span class="text-xs">${v.used ? '✅ Использован' : '🟢 Новый'}</span>
+          <button onclick="delKey('${k}')" class="text-red-400">Удалить</button>
+        </div>`).join('');
+    }
+    
+    async function createKey() {
+      await fetch(API + '/api/admin/key', { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify({ days: +days.value, note: note.value }) });
+      loadKeys();
+    }
+    
+    async function delKey(key) {
+      await fetch(API + '/api/admin/key/' + key, { method: 'DELETE', headers: headers() });
+      loadKeys();
+    }
+  </script>
+</body>
+</html>
