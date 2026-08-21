@@ -53,6 +53,7 @@ async function loadKeys() {
   try {
     const res = await fetch(API + '/api/admin/keys', { headers: hdrs() });
     if (res.status === 401) { showResult('❌ Неверный токен', true); return; }
+    if (!res.ok) { showResult('❌ Ошибка: ' + res.status, true); return; }
     const keys = await res.json();
     renderKeys(keys);
   } catch (e) { showResult('❌ Ошибка: ' + e.message, true); }
@@ -68,4 +69,38 @@ function renderKeys(keys) {
     <div class="flex flex-col sm:flex-row sm:items-center gap-3 p-3 bg-gray-700 rounded border border-gray-600">
       <code class="flex-1 text-sm break-all select-all" onclick="this.select()">${k}</code>
       <span class="text-xs text-gray-400 whitespace-nowrap">Создан: ${new Date(v.created).toLocaleString()}</span>
-      <span class="text-xs ${
+      <span class="text-xs ${v.used ? 'text-green-400' : 'text-yellow-400'} whitespace-nowrap">${v.used ? '✅ Использован' : '🟢 Новый'}</span>
+      ${v.hwid ? `<span class="text-xs text-gray-500 whitespace-nowrap">HWID: ${v.hwid.slice(0,12)}...</span>` : ''}
+      <button onclick="delKey('${k}')" class="text-red-400 hover:text-red-300 text-sm">Удалить</button>
+    </div>
+  `).join('');
+}
+
+async function createKey() {
+  showResult('⏳ Создание...');
+  try {
+    const res = await fetch(API + '/api/admin/key', {
+      method: 'POST',
+      headers: hdrs(),
+      body: JSON.stringify({ days: parseInt(document.getElementById('days').value), note: document.getElementById('note').value })
+    });
+    const data = await res.json();
+    if (!res.ok) { showResult('❌ ' + (data.error || res.status), true); return; }
+    showResult('✅ Ключ создан: ' + data.key);
+    document.getElementById('note').value = '';
+    loadKeys();
+  } catch (e) { showResult('❌ Ошибка: ' + e.message, true); }
+}
+
+async function delKey(key) {
+  if (!confirm('Удалить ключ?')) return;
+  try {
+    await fetch(API + '/api/admin/key/' + key, { method: 'DELETE', headers: hdrs() });
+    loadKeys();
+  } catch (e) { showResult('❌ Ошибка: ' + e.message, true); }
+}
+
+loadKeys();
+</script>
+</body>
+</html>
