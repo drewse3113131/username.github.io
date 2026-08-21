@@ -22,7 +22,7 @@
              class="w-32 p-3 bg-gray-700 border border-gray-600 rounded focus:ring-2 focus:ring-green-500 outline-none" placeholder="Days">
       <input id="note" type="text" placeholder="Note (user, vip, test...)" 
              class="flex-1 p-3 bg-gray-700 border border-gray-600 rounded focus:ring-2 focus:ring-green-500 outline-none">
-      <button onclick="createKey()" class="bg-green-600 hover:bg-green-700 px-6 py-3 rounded font-medium transition">Создать ключ</button>
+      <button id="btnCreate" class="bg-green-600 hover:bg-green-700 px-6 py-3 rounded font-medium transition">Создать ключ</button>
     </div>
     <div id="result" class="text-sm text-green-400 min-h-[20px]"></div>
   </div>
@@ -30,13 +30,14 @@
   <div class="bg-gray-800 rounded-lg p-6">
     <div class="flex justify-between items-center mb-4">
       <h2 class="text-xl font-semibold">Список ключей</h2>
-      <button onclick="loadKeys()" class="text-sm text-gray-400 hover:text-white">Обновить</button>
+      <button id="btnRefresh" class="text-sm text-gray-400 hover:text-white">Обновить</button>
     </div>
     <div id="keys" class="space-y-2 max-h-96 overflow-y-auto"></div>
   </div>
 </div>
 
 <script>
+// === ЯВНО ВЫНОСИМ В window ===
 const API = 'https://keys-b.onrender.com';
 
 function hdrs() {
@@ -71,7 +72,7 @@ function renderKeys(keys) {
       <span class="text-xs text-gray-400 whitespace-nowrap">Создан: ${new Date(v.created).toLocaleString()}</span>
       <span class="text-xs ${v.used ? 'text-green-400' : 'text-yellow-400'} whitespace-nowrap">${v.used ? '✅ Использован' : '🟢 Новый'}</span>
       ${v.hwid ? `<span class="text-xs text-gray-500 whitespace-nowrap">HWID: ${v.hwid.slice(0,12)}...</span>` : ''}
-      <button onclick="delKey('${k}')" class="text-red-400 hover:text-red-300 text-sm">Удалить</button>
+      <button onclick="window.delKey('${k}')" class="text-red-400 hover:text-red-300 text-sm">Удалить</button>
     </div>
   `).join('');
 }
@@ -100,6 +101,16 @@ async function delKey(key) {
   } catch (e) { showResult('❌ Ошибка: ' + e.message, true); }
 }
 
+// ПРИВЯЗЫВАЕМ К window ДЛЯ onclick
+window.createKey = createKey;
+window.delKey = delKey;
+window.loadKeys = loadKeys;
+
+// ИНИТ ЧЕРЕЗ СОБЫТИЯ (не inline onclick)
+document.getElementById('btnCreate').addEventListener('click', createKey);
+document.getElementById('btnRefresh').addEventListener('click', loadKeys);
+
+// СТАРТ
 loadKeys();
 </script>
 </body>
