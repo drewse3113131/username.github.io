@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Хана — аниме-девочка 3D</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #bfe3ff; font-family: system-ui, sans-serif; }
+  canvas { display: block; }
+  #title, #hint { position: fixed; left: 0; right: 0; text-align: center; pointer-events: none; }
+  #title { top: 16px; color: #fff; font-size: 22px; font-weight: 700; text-shadow: 0 2px 6px rgba(120,60,110,.6); }
+  #hint { bottom: 16px; color: #4a3550; font-size: 14px; padding: 0 16px; text-shadow: 0 1px 3px rgba(255,255,255,.7); }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="title">Хана</div>
+<div id="hint">Тяни мышкой или пальцем — вращение · колёсико — масштаб · клик по Хане — прыжок</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const rnd = (a, b) => a + Math.random() * (b - a);
+function canvasTex(w, h, draw) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
+const scene = new THREE.Scene();
+scene.background = canvasTex(8, 256, (g, w, h) => {
+  const gr = g.createLinearGradient(0, 0, 0, h);
+  gr.addColorStop(0, '#8fc9ff'); gr.addColorStop(0.6, '#d9ecff'); gr.addColorStop(1, '#ffe3ef');
+  g.fillStyle = gr; g.fillRect(0, 0, w, h);
+});
+scene.fog = new THREE.Fog(0xe6f0ff, 16, 40);
+
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(2.4, 3.0, 8.2);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 2.2, 0);
+controls.enableDamping = true;
+controls.minDistance = 3.5;
+controls.maxDistance = 16;
+controls.maxPolarAngle = Math.PI / 2 - 0.03;
+
+// ---------- свет ----------
+scene.add(new THREE.HemisphereLight(0xffffff, 0xb8d8a0, 1.5));
+const sun = new THREE.DirectionalLight(0xfff4e0, 1.6);
+sun.position.set(4, 9, 6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.normalBias = 0.04;
+sun.shadow.camera.left = -6; sun.shadow.camera.right = 6;
+sun.shadow.camera.top = 7; sun.shadow.camera.bottom = -6;
+scene.add(sun);
+
+// ---------- материалы (мультяшная заливка) ----------
+const toon = (color, o = {}) => new THREE.MeshToonMaterial({ color, ...o });
+const SKIN = '#ffe2d0';
+const M = {
+  skin: toon(SKIN, { emissive: SKIN, emissiveIntensity: 0.3 }),
+  hair: toon(0xff9ec4),
+  hairDark: toon(0xf07fae),
+  dress: toon(0x39478f),
+  white: toon(0xffffff),
+  red: toon(0xff4f6d),
+  shoe: toon(0x7a4a3a),
+  star: toon(0xffd84a),
+  grass: new THREE.MeshStandardMaterial({ color: 0x9fd98a, roughness: 1 }),
+  trunk: new THREE.MeshStandardMaterial({ color: 0x6b4a3a, roughness: 1 }),
+  blossom: new THREE.MeshStandardMaterial({ color: 0xffc2dc, roughness: 1 }),
+};
+const mesh = (geo, material, parent, x = 0, y = 0, z = 0) => {
+  const m = new THREE.Mesh(geo, material);
+  m.position.set(x, y, z);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  parent.add(m);
+  return m;
+};
+
+// ---------- лицо: рисуется на текстуре головы ----------
+function faceTex(happy) {
+  return canvasTex(2048, 1024, (g, W, H) => {
+    g.fillStyle = SKIN; g.fillRect(0, 0, W, H);
+    const cx = W * 0.25, ey = 548;         // u = 0.25 — перед сферы
+    // румянец
+    for (const s of [-1, 1]) {
+      const b = g.createRadialGradient(cx + s * 185, 640, 4, cx + s * 185, 640, 62);
+      b.addColorStop(0, 'rgba(255,120,150,.55)'); b.addColorStop(1, 'rgba(255,120,150,0)');
+      g.fillStyle = b; g.fillRect(cx + s * 185 - 70, 570, 140, 140);
+    }
+    for (const s of [-1, 1]) {
+      const x = cx + s * 122;
+      // бровь
+      g.strokeStyle = '#c96a92'; g.lineWidth = 7; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(x - 46, ey - 118 + s * 5); g.quadraticCurveTo(x, ey - 132, x + 46, ey - 118 - s * 5); g.stroke();
+      if (happy) {
+        // зажмуренные глаза-дужки
+        g.strokeStyle = '#3a2440'; g.lineWidth = 13;
+        g.beginPath(); g.moveTo(x - 52, ey + 18); g.quadraticCurveTo(x, ey - 46, x + 52, ey + 18); g.stroke();
+        continue;
+      }
+      // белок
+      g.fillStyle = '#fff';
+      g.beginPath(); g.ellipse(x, ey, 56, 78, 0, 0, Math.PI * 2); g.fill();
+      // радужка
+      g.save();
+      g.beginPath(); g.ellipse(x, ey, 56, 78, 0, 0, Math.PI * 2); g.clip();
+      const ir = g.createLinearGradient(0, ey - 70, 0, ey + 78);
+      ir.addColorStop(0, '#4b2a8a'); ir.addColorStop(0.55, '#8a5be0'); ir.addColorStop(1, '#ffb3e6');
+      g.fillStyle = ir;
+      g.beginPath(); g.ellipse(x, ey + 8, 47, 68, 0, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#24123f';
+      g.beginPath(); g.ellipse(x, ey + 4, 22, 34, 0, 0, Math.PI * 2); g.fill();
+      // тень от века
+      g.fillStyle = 'rgba(40,20,70,.35)'; g.fillRect(x - 60, ey - 80, 120, 34);
+      g.restore();
+      // блики
+      g.fillStyle = '#fff';
+      g.beginPath(); g.ellipse(x - 17, ey - 28, 15, 20, -0.4, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.arc(x + 20, ey + 34, 8, 0, Math.PI * 2); g.fill();
+      // верхнее веко и ресницы
+      g.strokeStyle = '#3a2440'; g.lineWidth = 15;
+      g.beginPath(); g.moveTo(x - 62, ey - 44); g.quadraticCurveTo(x, ey - 104, x + 62, ey - 44); g.stroke();
+      g.lineWidth = 8;
+      g.beginPath(); g.moveTo(x + s * 60, ey - 46); g.lineTo(x + s * 80, ey - 62); g.stroke();
+      // нижнее веко
+      g.lineWidth = 4; g.strokeStyle = '#a0647a';
+      g.beginPath(); g.moveTo(x - 34, ey + 80); g.quadraticCurveTo(x, ey + 86, x + 34, ey + 80); g.stroke();
+    }
+    // нос и рот
+    g.fillStyle = '#e6a48f';
+    g.beginPath(); g.arc(cx, 640, 4, 0, Math.PI * 2); g.fill();
+    if (happy) {
+      g.fillStyle = '#c94a63';
+      g.beginPath(); g.moveTo(cx - 34, 672); g.quadraticCurveTo(cx, 676, cx + 34, 672);
+      g.quadraticCurveTo(cx, 736, cx - 34, 672); g.fill();
+    } else {
+      g.strokeStyle = '#c94a63'; g.lineWidth = 6; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(cx - 24, 676); g.quadraticCurveTo(cx, 698, cx + 24, 676); g.stroke();
+    }
+  });
+}
+const faceOpen = faceTex(false), faceHappy = faceTex(true);
+
+// ---------- персонаж ----------
+const hero = new THREE.Group();
+scene.add(hero);
+const body = new THREE.Group();
+body.position.y = 1.25;
+hero.add(body);
+
+// платье-матроска
+const dressProfile = [
+  [0, -0.42], [0.78, -0.45], [0.74, -0.36], [0.5, 0.05], [0.3, 0.3], [0.33, 0.5], [0.36, 0.68], [0.3, 0.88], [0.14, 0.98], [0, 0.98],
+].map(([r, y]) => new THREE.Vector2(r, y));
+mesh(new THREE.LatheGeometry(dressProfile, 40), M.dress, body);
+// белая кайма подола, воротник, бант
+const hem = mesh(new THREE.TorusGeometry(0.76, 0.035, 10, 48), M.white, body, 0, -0.4, 0);
+hem.rotation.x = Math.PI / 2;
+mesh(new THREE.CylinderGeometry(0.17, 0.44, 0.2, 32), M.white, body, 0, 0.86, 0);
+const sash = mesh(new THREE.TorusGeometry(0.31, 0.04, 10, 40), M.red, body, 0, 0.3, 0);
+sash.rotation.x = Math.PI / 2;
+const bow = new THREE.Group();
+bow.position.set(0, 0.7, 0.36);
+body.add(bow);
+for (const s of [-1, 1]) {
+  const wing = mesh(new THREE.ConeGeometry(0.11, 0.24, 16), M.red, bow, s * 0.12, 0, 0);
+  wing.rotation.z = s * Math.PI / 2; wing.scale.z = 0.5;
+  const tail = mesh(new THREE.ConeGeometry(0.06, 0.24, 12), M.red, bow, s * 0.06, -0.15, 0);
+  tail.rotation.z = Math.PI + s * 0.3; tail.scale.z = 0.5;
+}
+mesh(new THREE.SphereGeometry(0.06, 16, 12), M.red, bow);
+// шея
+mesh(new THREE.CylinderGeometry(0.1, 0.11, 0.22, 16), M.skin, body, 0, 1.03, 0);
+
+// руки
+function makeArm(s) {
+  const shoulder = new THREE.Group();
+  shoulder.position.set(s * 0.33, 0.8, 0);
+  body.add(shoulder);
+  mesh(new THREE.SphereGeometry(0.15, 20, 16), M.dress, shoulder, 0, -0.05, 0);
+  const cuff = mesh(new THREE.TorusGeometry(0.1, 0.03, 8, 20), M.white, shoulder, 0, -0.17, 0);
+  cuff.rotation.x = Math.PI / 2;
+  mesh(new THREE.CapsuleGeometry(0.065, 0.48, 6, 14), M.skin, shoulder, 0, -0.42, 0);
+  mesh(new THREE.SphereGeometry(0.09, 16, 12), M.skin, shoulder, 0, -0.74, 0);
+  return shoulder;
+}
+const armL = makeArm(-1), armR = makeArm(1);
+
+// ноги
+function makeLeg(s) {
+  const hip = new THREE.Group();
+  hip.position.set(s * 0.19, 0.95, 0);
+  hero.add(hip);
+  mesh(new THREE.CapsuleGeometry(0.085, 0.5, 6, 14), M.skin, hip, 0, -0.3, 0);
+  mesh(new THREE.CapsuleGeometry(0.092, 0.22, 6, 14), M.white, hip, 0, -0.58, 0);
+  const shoe = mesh(new THREE.SphereGeometry(0.14, 20, 14), M.shoe, hip, 0, -0.84, 0.06);
+  shoe.scale.set(1, 0.75, 1.55);
+  return hip;
+}
+const legL = makeLeg(-1), legR = makeLeg(1);
+
+// голова
+const head = new THREE.Group();
+head.position.y = 1.9;
+body.add(head);
+const R = 0.95;
+const headMat = toon(0xffffff, { map: faceOpen, emissive: 0xffffff, emissiveMap: faceOpen, emissiveIntensity: 0.3 });
+const skull = mesh(new THREE.SphereGeometry(R, 64, 48), headMat, head);
+skull.scale.set(1, 0.94, 0.96);
+
+// волосы: макушка + затылок до плеч
+const HR = R * 1.06;
+mesh(new THREE.SphereGeometry(HR, 48, 24, 0, Math.PI * 2, 0, Math.PI * 0.4), M.hair, head);
+mesh(new THREE.SphereGeometry(HR, 48, 32, Math.PI - 0.35, Math.PI + 0.7, 0, Math.PI * 0.8), M.hair, head)
+  .material = toon(0xff9ec4, { side: THREE.DoubleSide });
+// чёлка: заострённые прядки, лежащие по форме головы
+function lockGeo(phi0, width, theta0, len, r) {
+  const NU = 6, NV = 8, pos = [], idx = [];
+  for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) {
+    const v = j / NV, u = i / NU - 0.5;
+    const phi = phi0 + u * width * (1 - v * v * 0.9), th = theta0 + v * len;
+    const rr = r + Math.sin(v * Math.PI) * 0.03;
+    pos.push(-rr * Math.cos(phi) * Math.sin(th), rr * Math.cos(th), rr * Math.sin(phi) * Math.sin(th));
+  }
+  for (let j = 0; j < NV; j++) for (let i = 0; i < NU; i++) {
+    const a = j * (NU + 1) + i, b = a + 1, c = a + NU + 1, d = c + 1;
+    idx.push(a, c, b, b, c, d);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+const fringeA = toon(0xff9ec4, { side: THREE.DoubleSide }), fringeB = toon(0xf07fae, { side: THREE.DoubleSide });
+for (let i = -5; i <= 5; i++) {
+  const len = Math.PI * (i === 0 ? 0.075 : 0.1 + (i % 2 ? 0.03 : 0) + Math.abs(i) * 0.006);
+  mesh(lockGeo(Math.PI / 2 - i * 0.2, 0.3, Math.PI * 0.36, len, HR + 0.012 + (i % 2 ? 0.012 : 0)), i % 2 ? fringeA : fringeB, head);
+}
+// боковые пряди у лица
+for (const s of [-1, 1]) {
+  const side = mesh(new THREE.ConeGeometry(0.17, 1.0, 12), M.hair, head, s * 0.88, -0.25, 0.3);
+  side.rotation.x = Math.PI; side.rotation.z = s * 0.08; side.scale.z = 0.5;
+}
+// хохолок
+const ahoge = mesh(new THREE.TorusGeometry(0.2, 0.03, 8, 16, Math.PI * 0.9), M.hairDark, head, 0.1, HR + 0.08, 0);
+ahoge.rotation.z = 0.5;
+// заколка-звёздочка
+const starShape = new THREE.Shape();
+for (let i = 0; i < 10; i++) {
+  const r = i % 2 ? 0.055 : 0.13, a = (i / 10) * Math.PI * 2 + Math.PI / 2;
+  starShape[i ? 'lineTo' : 'moveTo'](Math.cos(a) * r, Math.sin(a) * r);
+}
+const star = mesh(new THREE.ExtrudeGeometry(starShape, { depth: 0.04, bevelEnabled: false }), M.star, head, 0.62, 0.55, 0.72);
+star.rotation.set(-0.3, 0.7, -0.2);
+
+// два хвостика с бантами
+const tails = [];
+for (const s of [-1, 1]) {
+  const root = new THREE.Group();
+  root.position.set(s * 0.92, 0.42, -0.15);
+  head.add(root);
+  for (const k of [-1, 1]) {
+    const rb = mesh(new THREE.ConeGeometry(0.12, 0.26, 12), M.red, root, 0, k * 0.12, 0.02);
+    rb.rotation.z = k > 0 ? Math.PI : 0; rb.scale.z = 0.5;
+  }
+  let parent = root;
+  const segs = [];
+  for (let i = 0; i < 7; i++) {
+    const seg = new THREE.Group();
+    seg.position.set(i ? 0 : s * 0.14, i ? -0.3 : 0, 0);
+    parent.add(seg);
+    const r = 0.3 - i * 0.033;
+    const blob = mesh(new THREE.SphereGeometry(r, 20, 14), i % 2 ? M.hairDark : M.hair, seg, 0, -0.15, 0);
+    blob.scale.set(1, 1.25, 0.9);
+    segs.push(seg);
+    parent = seg;
+  }
+  tails.push({ s, segs });
+}
+
+// ---------- окружение ----------
+const ground = new THREE.Mesh(new THREE.CircleGeometry(34, 64), M.grass);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// сакуры
+for (const [x, z, k] of [[-4.2, -3, 1.2], [4.6, -4, 1.4], [-7.5, -8, 1.6], [8, -9, 1.3], [0.5, -10, 1.7]]) {
+  const tree = new THREE.Group();
+  tree.position.set(x, 0, z); tree.scale.setScalar(k);
+  const trunk = mesh(new THREE.CylinderGeometry(0.14, 0.24, 2.6, 10), M.trunk, tree, 0, 1.3, 0);
+  trunk.rotation.z = rnd(-0.1, 0.1);
+  for (let i = 0; i < 9; i++) {
+    const a = rnd(0, Math.PI * 2), d = rnd(0, 1.1);
+    mesh(new THREE.IcosahedronGeometry(rnd(0.6, 1.0), 1), M.blossom, tree, Math.cos(a) * d, 2.9 + rnd(-0.3, 0.9), Math.sin(a) * d);
+  }
+  scene.add(tree);
+}
+// цветочки в траве
+const flowerGeo = new THREE.SphereGeometry(0.07, 8, 6);
+for (let i = 0; i < 70; i++) {
+  const a = rnd(0, Math.PI * 2), d = rnd(1.6, 12);
+  const f = new THREE.Mesh(flowerGeo, [M.white, M.star, M.red][i % 3]);
+  f.position.set(Math.cos(a) * d, 0.06, Math.sin(a) * d);
+  scene.add(f);
+}
+// падающие лепестки
+const petalMat = new THREE.MeshBasicMaterial({ color: 0xffb3d1, side: THREE.DoubleSide });
+const petalGeo = new THREE.CircleGeometry(0.07, 6);
+const petals = [];
+for (let i = 0; i < 90; i++) {
+  const p = new THREE.Mesh(petalGeo, petalMat);
+  p.scale.y = 0.6;
+  p.position.set(rnd(-9, 9), rnd(0, 9), rnd(-9, 5));
+  p.userData = { v: rnd(0.3, 0.8), ph: rnd(0, 6), sp: rnd(1, 3) };
+  scene.add(p); petals.push(p);
+}
+
+// ---------- взаимодействие ----------
+let jumpT = -1;
+const ray = new THREE.Raycaster(), ptr = new THREE.Vector2();
+let downAt = null;
+renderer.domElement.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 6) return;
+  ptr.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(ptr, camera);
+  if (ray.intersectObject(hero, true).length && jumpT < 0) jumpT = 0;
+});
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------- анимация ----------
+const clock = new THREE.Clock();
+function tick() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+
+  // прыжок по клику
+  let y = 0, air = 0;
+  if (jumpT >= 0) {
+    jumpT += dt;
+    const p = jumpT / 0.9;
+    if (p >= 1) { jumpT = -1; hero.rotation.y = 0; }
+    else { air = Math.sin(p * Math.PI); y = air * 1.3; hero.rotation.y = p * Math.PI * 2; }
+  }
+  hero.position.y = y;
+  const jumping = jumpT >= 0;
+
+  // покачивание и наклон головы
+  body.position.y = 1.25 + Math.sin(t * 2) * 0.02;
+  body.rotation.z = Math.sin(t * 1.1) * 0.03;
+  head.rotation.z = Math.sin(t * 0.9) * 0.07;
+  head.rotation.y = Math.sin(t * 0.6) * 0.12;
+
+  // руки: правая машет, в прыжке обе вверх
+  const wave = 2.5 + Math.sin(t * 7) * 0.3;
+  armR.rotation.z += ((jumping ? 2.7 : wave) - armR.rotation.z) * 0.25;
+  armL.rotation.z += ((jumping ? -2.7 : -0.25 + Math.sin(t * 2) * 0.05) - armL.rotation.z) * 0.25;
+  legL.rotation.z = -air * 0.45; legR.rotation.z = air * 0.45;
+
+  // хвостики
+  for (const { s, segs } of tails) {
+    segs.forEach((seg, i) => {
+      seg.rotation.z = s * (i ? 0.05 : 0.3) + Math.sin(t * 2.2 - i * 0.5) * 0.06 + s * air * 0.22;
+      seg.rotation.x = Math.sin(t * 1.7 - i * 0.6 + s) * 0.05 + air * 0.15;
+    });
+  }
+
+  // моргание; в прыжке — радостное лицо
+  const blink = !jumping && (t % 3.6) < 0.12;
+  const want = jumping || blink ? faceHappy : faceOpen;
+  if (headMat.map !== want) { headMat.map = headMat.emissiveMap = want; headMat.needsUpdate = true; }
+
+  // лепестки
+  for (const p of petals) {
+    const u = p.userData;
+    p.position.y -= u.v * dt;
+    p.position.x += Math.sin(t * 0.8 + u.ph) * 0.006;
+    p.rotation.x += u.sp * dt; p.rotation.z += u.sp * 0.6 * dt;
+    if (p.position.y < 0.02) p.position.y = 9;
+  }
+
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+tick();
+</script>
+</body>
+</html>
