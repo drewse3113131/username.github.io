@@ -32,6 +32,8 @@
 <div class="hud bottom">
   <button id="btnSpin">⟳ Вращение: вкл</button>
   <button id="btnAnim">♪ Анимация: вкл</button>
+  <button id="btnBones">🦴 Кости: выкл</button>
+  <button id="btnWave">👋 Помахать</button>
   <button id="btnGlb" class="primary">⬇ Скачать .glb</button>
 </div>
 
@@ -39,11 +41,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
-import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // ---------- palette ----------
 const C = {
-  skin: 0xffe4d8, hair: 0xf5a3c0, hairDark: 0xe07fa6, dress: 0x33283f, white: 0xffffff,
+  skin: 0xffece3, hair: 0xf5a3c0, hairDark: 0xe07fa6, dress: 0x33283f, white: 0xffffff,
   rose: 0xe0457b, gold: 0xf2c14e, earIn: 0xffd3e0, shoe: 0x2a2033,
 };
 
@@ -78,7 +80,15 @@ const toon = (color, side = THREE.FrontSide) => {
 const outlineMat = new THREE.ShaderMaterial({
   side: THREE.BackSide,
   uniforms: { t: { value: 0.0032 } },
-  vertexShader: 'uniform float t; void main(){ gl_Position = projectionMatrix * modelViewMatrix * vec4(position + normalize(normal) * t, 1.0); }',
+  vertexShader: `#include <common>
+    #include <skinning_pars_vertex>
+    uniform float t;
+    void main(){
+      #include <skinbase_vertex>
+      vec3 transformed = position + normalize(normal) * t;
+      #include <skinning_vertex>
+      #include <project_vertex>
+    }`,
   fragmentShader: 'void main(){ gl_FragColor = vec4(0.16, 0.09, 0.14, 1.0); }',
 });
 
@@ -90,7 +100,7 @@ function add(parent, geo, color, { outline = true, side = THREE.FrontSide, name 
   const m = new THREE.Mesh(geo, typeof color === 'number' ? toon(color, side) : color);
   if (name) m.name = name;
   parent.add(m);
-  if (outline) { const o = new THREE.Mesh(geo, outlineMat); m.add(o); outlines.push(o); }
+  m.userData.outline = outline;
   return m;
 }
 
@@ -162,8 +172,9 @@ const body = new THREE.Group(); body.name = 'Body'; character.add(body);
 
 // legs (white stockings) + shoes
 const legGeo = lathe([[0.001, 0.05], [0.03, 0.06], [0.031, 0.1], [0.045, 0.24], [0.05, 0.31], [0.044, 0.41], [0.047, 0.46], [0.068, 0.66], [0.074, 0.78], [0.06, 0.86], [0.001, 0.88]], 20);
+const legs = [];
 for (const s of [1, -1]) {
-  const leg = new THREE.Group(); leg.position.x = s * 0.072; body.add(leg);
+  const leg = new THREE.Group(); leg.position.x = s * 0.072; body.add(leg); legs.push(leg);
   add(leg, legGeo, 0xfff7fa, { name: 'Leg' });
   const shoe = add(leg, sphere(0.043, 0.036, 0.092, 20), C.shoe, { name: 'Shoe' }); shoe.position.set(0, 0.036, 0.034);
   const heel = add(leg, new THREE.CylinderGeometry(0.026, 0.02, 0.05, 12), C.shoe); heel.position.set(0, 0.025, -0.03);
@@ -241,64 +252,89 @@ add(tailPivot, strand([V3(0, 0, 0), V3(0, -0.14, -0.14), V3(0.03, -0.2, -0.32), 
 // =====================================================================
 const R = 0.155;
 const head = new THREE.Group(); head.name = 'Head'; head.position.set(0, 1.445, 0); head.scale.setScalar(1.12); character.add(head);
-const jaw = p => { if (p.y < 0) { const k = Math.pow(-p.y / R, 1.6); p.x *= 1 - 0.3 * k; p.z *= 1 - 0.1 * k; } return p; };
+const jaw = p => {
+  if (p.y < 0) {
+    const k = -p.y / R;
+    p.x *= 1 - 0.5 * Math.pow(k, 1.8);                       // cheeks taper into a small chin
+    p.z *= p.z > 0 ? 1 - 0.04 * k : 1 - 0.3 * Math.pow(k, 1.5);
+    p.y *= 1.1;
+  }
+  if (p.z > 0) {
+    p.z *= 0.94;                                             // flatter face
+    const dx = p.x / (R * 0.09), dy = (p.y + R * 0.3) / (R * 0.1);
+    p.z += 0.011 * Math.exp(-(dx * dx + dy * dy));           // nose
+  }
+  return p;
+};
 function deform(g) {
   const a = g.attributes.position, p = new THREE.Vector3();
   for (let i = 0; i < a.count; i++) { jaw(p.fromBufferAttribute(a, i)); a.setXYZ(i, p.x, p.y, p.z); }
   return g;
 }
 {
-  let g = new THREE.SphereGeometry(R, 40, 28); g.deleteAttribute('uv'); g.deleteAttribute('normal');
+  let g = new THREE.SphereGeometry(R, 56, 40); g.deleteAttribute('uv'); g.deleteAttribute('normal');
   g = mergeVertices(deform(g), 1e-5); g.computeVertexNormals();
   add(head, g, C.skin, { name: 'Face' });
 }
 
 // face texture (eyes, brows, mouth, blush)
+const LASH = '#40242f';
+function drawEye(x, cx, cy, d, closed) {
+  const ell = (ex, ey, rx, ry) => { x.beginPath(); x.ellipse(ex, ey, rx, ry, 0, 0, Math.PI * 2); };
+  x.save(); x.translate(cx, cy); x.scale(d, 1);              // +x is the outer side of the eye
+  // blush
+  const bl = x.createRadialGradient(30, 150, 4, 30, 150, 80);
+  bl.addColorStop(0, 'rgba(255,125,150,.5)'); bl.addColorStop(1, 'rgba(255,125,150,0)');
+  x.save(); x.translate(0, 150 * 0.55); x.scale(1, 0.45); x.fillStyle = bl; ell(30, 150, 80, 80); x.fill(); x.restore();
+  x.strokeStyle = 'rgba(240,110,140,.55)'; x.lineWidth = 3.5;
+  for (const o of [8, 30, 52]) { x.beginPath(); x.moveTo(o + 7, 140); x.lineTo(o - 5, 162); x.stroke(); }
+  // brow
+  x.strokeStyle = '#c66f94'; x.lineWidth = 6.5; x.beginPath(); x.moveTo(-58, -176); x.quadraticCurveTo(10, -196, 86, -168); x.stroke();
+  if (closed) {
+    x.strokeStyle = LASH; x.lineWidth = 13; x.beginPath(); x.moveTo(-90, 6); x.quadraticCurveTo(0, 60, 92, 2); x.stroke();
+    x.lineWidth = 8; x.beginPath(); x.moveTo(90, 4); x.lineTo(114, -8); x.stroke();
+    x.restore(); return;
+  }
+  // eyeball
+  x.save(); x.beginPath(); x.moveTo(-88, 10);
+  x.bezierCurveTo(-80, -70, -45, -100, 0, -100); x.bezierCurveTo(45, -100, 72, -85, 85, -55);
+  x.bezierCurveTo(95, -20, 92, 15, 80, 40); x.bezierCurveTo(62, 92, 10, 108, -45, 96); x.bezierCurveTo(-80, 84, -92, 50, -88, 10);
+  x.closePath(); x.clip();
+  x.fillStyle = '#fffaf9'; x.fillRect(-110, -120, 220, 240);
+  const ig = x.createLinearGradient(0, -100, 0, 104);
+  ig.addColorStop(0, '#083f37'); ig.addColorStop(0.42, '#119e7f'); ig.addColorStop(0.78, '#4fdcae'); ig.addColorStop(1, '#b4fbe0');
+  x.fillStyle = ig; ell(2, 4, 73, 101); x.fill();
+  x.strokeStyle = 'rgba(5,46,40,.7)'; x.lineWidth = 7; ell(2, 4, 70, 98); x.stroke();
+  x.fillStyle = '#052e28'; ell(2, -4, 28, 46); x.fill();
+  x.fillStyle = 'rgba(215,255,240,.5)'; ell(2, 58, 42, 26); x.fill();
+  const sh = x.createLinearGradient(0, -100, 0, -20);
+  sh.addColorStop(0, 'rgba(35,15,40,.55)'); sh.addColorStop(1, 'rgba(35,15,40,0)');
+  x.fillStyle = sh; x.fillRect(-110, -120, 220, 110);
+  x.restore();
+  // highlights stay on the same (light) side for both eyes
+  x.fillStyle = '#fff'; ell(-30 * d, -46, 21, 27); x.fill(); ell(32 * d, 54, 9, 11); x.fill();
+  // upper lash
+  x.fillStyle = LASH; x.beginPath(); x.moveTo(-101, 16);
+  x.bezierCurveTo(-95, -78, -52, -113, 0, -113); x.bezierCurveTo(52, -113, 80, -95, 93, -66);
+  x.lineTo(124, -80); x.lineTo(101, -46); x.lineTo(121, -40); x.lineTo(93, -20);
+  x.bezierCurveTo(88, -58, 60, -90, 0, -91); x.bezierCurveTo(-45, -91, -76, -58, -86, 8);
+  x.closePath(); x.fill();
+  // lower lash + eyelid crease
+  x.strokeStyle = 'rgba(64,36,47,.85)'; x.lineWidth = 5; x.beginPath(); x.moveTo(86, 34); x.bezierCurveTo(68, 90, 22, 108, -28, 102); x.stroke();
+  x.strokeStyle = 'rgba(170,100,110,.6)'; x.lineWidth = 4; x.beginPath(); x.moveTo(-48, -130); x.quadraticCurveTo(8, -143, 64, -121); x.stroke();
+  x.restore();
+}
 function faceCanvas(closed) {
   const W = 1024, H = 755, c = document.createElement('canvas'); c.width = W; c.height = H;
   const x = c.getContext('2d'); x.lineCap = 'round'; x.lineJoin = 'round';
-  const ell = (cx, cy, rx, ry) => { x.beginPath(); x.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); };
-  for (const d of [-1, 1]) {
-    const cx = 512 + d * 222, cy = 432;
-    // blush
-    const bl = x.createRadialGradient(cx + d * 30, cy + 172, 4, cx + d * 30, cy + 172, 85);
-    bl.addColorStop(0, 'rgba(255,120,150,.5)'); bl.addColorStop(1, 'rgba(255,120,150,0)');
-    x.fillStyle = bl; x.save(); x.translate(0, (cy + 172) * 0.55); x.scale(1, 0.45); ell(cx + d * 30, cy + 172, 85, 85); x.fill(); x.restore();
-    // brow
-    x.strokeStyle = '#c9799a'; x.lineWidth = 7; x.beginPath(); x.moveTo(cx - d * 70, cy - 196); x.quadraticCurveTo(cx + d * 10, cy - 218, cx + d * 95, cy - 186); x.stroke();
-    x.save(); x.translate(cx, cy); x.scale(1.3, 1.3); x.translate(-cx, -cy);
-    if (closed) {
-      x.strokeStyle = '#3a2230'; x.lineWidth = 15; x.beginPath(); x.moveTo(cx - 88, cy + 5); x.quadraticCurveTo(cx, cy + 62, cx + 88, cy + 5); x.stroke();
-      x.restore(); continue;
-    }
-    x.save(); ell(cx, cy, 84, 106); x.clip();
-    x.fillStyle = '#fff'; x.fillRect(cx - 100, cy - 120, 200, 240);
-    const ig = x.createLinearGradient(0, cy - 95, 0, cy + 105);
-    ig.addColorStop(0, '#0b4d44'); ig.addColorStop(0.45, '#17a07f'); ig.addColorStop(1, '#8af5c9');
-    x.fillStyle = ig; ell(cx, cy + 10, 66, 96); x.fill();
-    x.fillStyle = '#06332d'; ell(cx, cy + 4, 28, 46); x.fill();
-    x.strokeStyle = 'rgba(6,51,45,.55)'; x.lineWidth = 6; ell(cx, cy + 10, 63, 93); x.stroke();
-    x.fillStyle = 'rgba(40,20,40,.28)'; x.fillRect(cx - 100, cy - 120, 200, 62);       // lid shadow
-    x.fillStyle = '#fff'; ell(cx - 26, cy - 40, 21, 25); x.fill(); ell(cx + 28, cy + 52, 10, 12); x.fill();
-    x.restore();
-    // lashes
-    x.strokeStyle = '#3a2230'; x.lineWidth = 17; x.beginPath();
-    x.moveTo(cx - 92, cy - 38); x.quadraticCurveTo(cx - 30, cy - 128, cx + 40, cy - 106); x.quadraticCurveTo(cx + 84, cy - 86, cx + 94, cy - 34); x.stroke();
-    x.lineWidth = 11; x.beginPath(); x.moveTo(cx + d * 90, cy - 46); x.lineTo(cx + d * 116, cy - 70); x.stroke();
-    x.beginPath(); x.moveTo(cx + d * 94, cy - 26); x.lineTo(cx + d * 120, cy - 34); x.stroke();
-    x.lineWidth = 5; x.strokeStyle = 'rgba(58,34,48,.7)'; x.beginPath(); x.moveTo(cx + d * 30, cy + 108); x.quadraticCurveTo(cx + d * 66, cy + 100, cx + d * 82, cy + 66); x.stroke();
-    x.restore();
-  }
-  // mouth
-  x.strokeStyle = '#b5485c'; x.lineWidth = 6; x.beginPath(); x.moveTo(484, 636); x.quadraticCurveTo(512, 662, 540, 636); x.stroke();
-  // nose hint
-  x.strokeStyle = 'rgba(200,120,120,.6)'; x.lineWidth = 4; x.beginPath(); x.moveTo(510, 566); x.lineTo(514, 574); x.stroke();
+  for (const d of [-1, 1]) drawEye(x, 512 + d * 196, 440, d, closed);
+  x.strokeStyle = '#b5485c'; x.lineWidth = 5.5; x.beginPath(); x.moveTo(490, 652); x.quadraticCurveTo(512, 672, 534, 652); x.stroke();
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t;
 }
 const faceOpen = faceCanvas(false), faceClosed = faceCanvas(true);
 const faceMat = new THREE.MeshBasicMaterial({ map: faceOpen, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
 {
-  const g = deform(new THREE.SphereGeometry(R * 1.006, 40, 30, Math.PI / 2 - 0.95, 1.9, 0.95, 1.4));
+  const g = deform(new THREE.SphereGeometry(R * 1.006, 48, 36, Math.PI / 2 - 0.95, 1.9, 0.95, 1.4));
   add(head, g, faceMat, { outline: false, name: 'FaceDetails' });
 }
 
@@ -353,6 +389,87 @@ add(head, grid(60, 3, (u, v) => {
 }), C.white, { side: THREE.DoubleSide, outline: false, name: 'Headdress' });
 add(head, new THREE.TorusGeometry(R * 1.09, 0.008, 8, 40, 1.56).rotateZ(Math.PI / 2 - 0.78), C.rose, { outline: false }).position.z = 0.028;
 
+// =====================================================================
+//  RIG: bake every part to world space, bind to one skeleton
+// =====================================================================
+character.updateMatrixWorld(true);
+const W = (o, x = 0, y = 0, z = 0) => o.localToWorld(V3(x, y, z));
+const bones = {}, bonePos = {}, boneList = [];
+function bone(name, parent, wp) {
+  const b = new THREE.Bone(); b.name = name; bonePos[name] = wp.clone(); bones[name] = b; boneList.push(b);
+  if (parent) { b.position.copy(wp).sub(bonePos[parent]); bones[parent].add(b); } else b.position.copy(wp);
+}
+bone('Hips', null, V3(0, 0.9, 0)); bone('Spine', 'Hips', V3(0, 0.985, 0)); bone('Chest', 'Spine', V3(0, 1.09, 0));
+bone('Neck', 'Chest', V3(0, 1.225, 0)); bone('Head', 'Neck', V3(0, 1.3, 0));
+body.userData.chain = { bones: ['Hips', 'Spine', 'Chest', 'Neck'], end: V3(0, 1.3, 0), w: 0.03 };
+head.userData.chain = { bones: ['Head'], end: V3(0, 1.6, 0), w: 0.01 };
+[1, -1].forEach((s, i) => {
+  const S = s > 0 ? 'L' : 'R', leg = legs[i], arm = arms[i], ear = ears[i], tw = tails[i];
+  bone('UpperLeg' + S, 'Hips', W(leg, 0, 0.84, 0)); bone('LowerLeg' + S, 'UpperLeg' + S, W(leg, 0, 0.44, 0)); bone('Foot' + S, 'LowerLeg' + S, W(leg, 0, 0.09, 0));
+  leg.userData.chain = { bones: ['UpperLeg' + S, 'LowerLeg' + S, 'Foot' + S], end: W(leg, 0, 0, 0), w: 0.05 };
+  bone('Shoulder' + S, 'Chest', V3(s * 0.05, 1.19, 0)); bone('UpperArm' + S, 'Shoulder' + S, W(arm));
+  bone('LowerArm' + S, 'UpperArm' + S, W(arm, 0, -0.27, 0)); bone('Hand' + S, 'LowerArm' + S, W(arm, 0, -0.51, 0));
+  arm.userData.chain = { bones: ['UpperArm' + S, 'LowerArm' + S, 'Hand' + S], end: W(arm, 0, -0.62, 0), w: 0.045 };
+  bone('Ear' + S, 'Head', W(ear)); ear.userData.chain = { bones: ['Ear' + S], end: W(ear, 0, 0.1, 0), w: 0.01 };
+  const tp = [V3(0, 0, 0), V3(s * 0.13, -0.13, -0.02), V3(s * 0.12, -0.36, -0.01), V3(s * 0.15, -0.56, 0.01)].map(p => W(tw, p.x, p.y, p.z));
+  tp.forEach((p, j) => bone('Hair' + S + (j + 1), j ? 'Hair' + S + j : 'Head', p));
+  tw.userData.chain = { bones: tp.map((_, j) => 'Hair' + S + (j + 1)), end: W(tw, s * 0.2, -0.7, 0.02), w: 0.05 };
+});
+{
+  const tp = [V3(0, 0, 0), V3(0, -0.14, -0.14), V3(0.03, -0.2, -0.32), V3(0.08, -0.1, -0.45), V3(0.09, 0.07, -0.48)].map(p => W(tailPivot, p.x, p.y, p.z));
+  tp.forEach((p, j) => bone('Tail' + (j + 1), j ? 'Tail' + j : 'Hips', p));
+  tailPivot.userData.chain = { bones: tp.map((_, j) => 'Tail' + (j + 1)), end: W(tailPivot, 0.05, 0.19, -0.44), w: 0.05 };
+}
+const skeleton = new THREE.Skeleton(boneList);
+
+function skinWeights(geo, chain) {
+  const J = chain.bones.map(n => bonePos[n]).concat([chain.end]), nb = chain.bones.length, w = chain.w;
+  const L = [0]; for (let i = 0; i < nb; i++) L.push(L[i] + J[i].distanceTo(J[i + 1]));
+  const ids = chain.bones.map(n => boneList.indexOf(bones[n]));
+  const pos = geo.attributes.position, n = pos.count, si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+  const p = new THREE.Vector3(), ab = new THREE.Vector3(), q = new THREE.Vector3();
+  for (let v = 0; v < n; v++) {
+    p.fromBufferAttribute(pos, v);
+    let best = Infinity, sLen = 0;
+    for (let i = 0; i < nb; i++) {
+      ab.subVectors(J[i + 1], J[i]);
+      const t = Math.min(1, Math.max(0, q.subVectors(p, J[i]).dot(ab) / ab.lengthSq()));
+      const d = q.copy(J[i]).addScaledVector(ab, t).distanceToSquared(p);
+      if (d < best) { best = d; sLen = L[i] + t * (L[i + 1] - L[i]); }
+    }
+    let k = 0; while (k + 1 < nb && L[k + 1] <= sLen) k++;
+    let a = k, b = k, wa = 1;
+    if (k >= 1 && sLen - L[k] < w) { b = k - 1; wa = 0.5 + 0.5 * (sLen - L[k]) / w; }
+    else if (k + 1 < nb && L[k + 1] - sLen < w) { b = k + 1; wa = 0.5 + 0.5 * (L[k + 1] - sLen) / w; }
+    si[v * 4] = ids[a]; sw[v * 4] = wa; si[v * 4 + 1] = ids[b]; sw[v * 4 + 1] = 1 - wa;
+  }
+  geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
+  geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
+}
+
+const buckets = new Map(), outlineGeos = [];
+character.traverse(o => {
+  if (!o.isMesh) return;
+  let c = o; while (c && !c.userData.chain) c = c.parent;
+  const g = o.geometry.clone().applyMatrix4(o.matrixWorld);
+  if (o.material !== faceMat) g.deleteAttribute('uv');
+  skinWeights(g, c.userData.chain);
+  if (!buckets.has(o.material)) buckets.set(o.material, []);
+  buckets.get(o.material).push(g);
+  if (o.userData.outline) outlineGeos.push(g);
+});
+character.remove(body, head);
+character.add(bones.Hips);
+character.updateMatrixWorld(true); skeleton.calculateInverses();
+const skinned = (geos, mat, name) => {
+  const m = new THREE.SkinnedMesh(mergeGeometries(geos), mat); m.name = name; m.frustumCulled = false;
+  character.add(m); m.bind(skeleton, new THREE.Matrix4()); return m;
+};
+const partName = m => m === faceMat ? 'FaceDetails' : 'Part_' + m.color.getHexString() + (m.side === THREE.DoubleSide ? '_2s' : '');
+for (const [mat, geos] of buckets) skinned(geos, mat, partName(mat));
+outlines.push(skinned(outlineGeos, outlineMat, 'Outline'));
+const skelHelper = new THREE.SkeletonHelper(bones.Hips); skelHelper.visible = false; scene.add(skelHelper);
+
 // soft ground shadow
 {
   const c = document.createElement('canvas'); c.width = c.height = 128; const x = c.getContext('2d');
@@ -363,17 +480,30 @@ add(head, new THREE.TorusGeometry(R * 1.09, 0.008, 8, 40, 1.56).rotateZ(Math.PI 
 }
 
 // =====================================================================
-//  animation, UI, export
+//  animation (bone driven), UI, export
 // =====================================================================
-let animate = true, nextBlink = 2, blinkEnd = 0;
+let animate = true, nextBlink = 2, blinkEnd = 0, waveStart = -10;
+const B = bones;
 function pose(t) {
-  body.position.y = Math.sin(t * 1.7) * 0.004;
-  head.position.y = 1.445 + Math.sin(t * 1.7 - 0.4) * 0.005;
-  head.rotation.z = Math.sin(t * 0.8) * 0.045; head.rotation.y = Math.sin(t * 0.55) * 0.09;
-  tails.forEach((p, i) => { const s = i ? -1 : 1; p.rotation.z = s * 0.03 + Math.sin(t * 1.5 + i) * 0.045; p.rotation.x = Math.sin(t * 1.1 + i * 2) * 0.05; });
-  arms.forEach((a, i) => { const s = i ? -1 : 1; a.rotation.z = s * (0.72 + Math.sin(t * 1.7) * 0.025); });
-  ears.forEach((e, i) => { const s = i ? -1 : 1; const tw = Math.max(0, Math.sin(t * 2.3 + i * 1.7) - 0.93) * 4; e.rotation.z = -s * (0.42 + tw); });
-  tailPivot.rotation.y = Math.sin(t * 1.3) * 0.35; tailPivot.rotation.x = Math.sin(t * 0.9) * 0.08;
+  skeleton.pose();                                           // back to bind pose, then offsets
+  const br = Math.sin(t * 1.7);
+  B.Chest.position.y += br * 0.003; B.Spine.rotation.x = br * 0.008;
+  B.Head.rotation.set(Math.sin(t * 0.7) * 0.03, Math.sin(t * 0.55) * 0.1, Math.sin(t * 0.8) * 0.05);
+  B.Hips.rotation.y = Math.sin(t * 0.55) * 0.03;
+  ['L', 'R'].forEach((S, i) => {
+    const s = i ? -1 : 1;
+    for (let j = 1; j <= 4; j++) { const h = B['Hair' + S + j]; h.rotation.z = Math.sin(t * 1.5 + i - j * 0.45) * 0.045; h.rotation.x = Math.sin(t * 1.1 + i * 2 - j * 0.4) * 0.04; }
+    B['UpperArm' + S].rotation.z = s * br * 0.03; B['LowerArm' + S].rotation.z = s * br * 0.03;
+    B['Ear' + S].rotation.z = -s * Math.max(0, Math.sin(t * 2.3 + i * 1.7) - 0.93) * 4;
+  });
+  for (let j = 1; j <= 5; j++) { B['Tail' + j].rotation.y = Math.sin(t * 1.3 - j * 0.5) * 0.13; B['Tail' + j].rotation.x = Math.sin(t * 0.9 - j * 0.3) * 0.04; }
+  const u = (t - waveStart) / 2.8;
+  if (u > 0 && u < 1) {
+    const e = Math.min(1, Math.sin(Math.PI * u) * 2.2);
+    B.UpperArmR.rotation.z = -1.25 * e; B.LowerArmR.rotation.z = -(0.75 + Math.sin(t * 10) * 0.3) * e;
+    B.HandR.rotation.z = -Math.sin(t * 10 + 0.6) * 0.25 * e;
+    B.Head.rotation.z += -0.12 * e; B.Spine.rotation.z = 0.04 * e;
+  }
 }
 function resize() {
   const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false);
@@ -393,11 +523,13 @@ renderer.setAnimationLoop(() => {
 
 const $ = id => document.getElementById(id);
 $('btnSpin').onclick = e => { controls.autoRotate = !controls.autoRotate; e.target.textContent = '⟳ Вращение: ' + (controls.autoRotate ? 'вкл' : 'выкл'); };
-$('btnAnim').onclick = e => { animate = !animate; if (!animate) { pose(0); faceMat.map = faceOpen; } e.target.textContent = '♪ Анимация: ' + (animate ? 'вкл' : 'выкл'); };
+$('btnAnim').onclick = e => { animate = !animate; if (!animate) { skeleton.pose(); faceMat.map = faceOpen; } e.target.textContent = '♪ Анимация: ' + (animate ? 'вкл' : 'выкл'); };
+$('btnBones').onclick = e => { skelHelper.visible = !skelHelper.visible; e.target.textContent = '🦴 Кости: ' + (skelHelper.visible ? 'вкл' : 'выкл'); };
+$('btnWave').onclick = () => { if (!animate) $('btnAnim').click(); waveStart = clock.getElapsedTime(); };
 
-// GLB export: neutral pose, no outline shells, toon -> standard materials
+// GLB export: bind pose, skeleton included, no outline shell, toon -> standard materials
 async function exportGLB() {
-  const was = animate; animate = false; pose(0); faceMat.map = faceOpen;
+  const was = animate; animate = false; skeleton.pose(); faceMat.map = faceOpen;
   outlines.forEach(o => o.visible = false);
   const swapped = [], std = new Map();
   character.traverse(o => {
@@ -412,6 +544,7 @@ async function exportGLB() {
 }
 window.exportGLB = exportGLB; window.__ready = true;
 window.__view = (x, y, z, ty = 0.84) => { controls.autoRotate = false; camera.position.set(x, y, z); controls.target.set(0, ty, 0); controls.update(); };
+window.__dbg = { wave: () => { waveStart = clock.getElapsedTime() - 1.2; }, bones: v => { skelHelper.visible = v; }, freeze: () => { animate = false; } };
 $('btnGlb').onclick = async () => {
   const buf = await exportGLB();
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf], { type: 'model/gltf-binary' }));
